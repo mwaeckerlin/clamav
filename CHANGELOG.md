@@ -1,5 +1,14 @@
 # Changelog
 
+- 2026-07-18 **1.0.1**
+    - Security hardening after static security review
+        - all configuration values from the environment are validated before use; a malformed value (port, update frequency, size limit, bind address or mirror) stops the container with a clear error instead of silently ending up in the scanner configuration
+        - the standalone smoke-test setup now exposes the scanner port on localhost only — the scanner protocol is unauthenticated and must never be reachable from outside the machine
+        - the standalone smoke-test setup reports container health via the built-in probe, same as the full mailservice test stack
+    - New virus signatures become active immediately after download instead of up to an hour later
+    - Project-local test suite: headless-image contract and configuration validation (`npm test`)
+    - Documentation: security posture of the scanner port, configuration validation and test instructions
+
 - 2026-07-17 **1.0.0**
     - Initial release: headless, shell-free ClamAV container
         - runtime contains only the virus scanner, the signature updater and their libraries — no shell, no busybox, no perl, no package manager

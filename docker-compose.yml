@@ -7,9 +7,20 @@ services:
     image: mwaeckerlin/clamav
     build: .
     ports:
-      - "3310:3310"
+      # loopback only: the clamd protocol is unauthenticated (any peer
+      # could stream scan jobs or issue SHUTDOWN) — never expose it
+      # beyond the machine running the smoke test
+      - "127.0.0.1:3310:3310"
     volumes:
       - db:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/bin/init", "--healthcheck"]
+      # freshclam takes minutes on the first-ever start to bootstrap
+      # the signature DB into the volume
+      interval: 5s
+      timeout: 5s
+      retries: 240
+      start_period: 10s
 
 volumes:
   db:

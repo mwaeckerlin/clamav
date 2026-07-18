@@ -23,6 +23,35 @@ any consumer that speaks the clamd protocol on port 3310.
 | `FRESHCLAM_CHECKS`    | `24`                       | How many times per day `freshclam --daemon` checks for signature updates. `24` = hourly.                                                                                                                |
 | `FRESHCLAM_MIRROR`    | `database.clamav.net`      | Upstream mirror for signature downloads. Override if you run a local mirror.                                                                                                                            |
 
+### Configuration validation
+
+Every value above is rendered into `clamd.conf`/`freshclam.conf`, which
+are plain key-space-value files. To rule out config injection (a value
+containing a newline would become an extra directive), `init` validates
+each value before writing anything and **refuses to start** with a
+clear `invalid <VAR>` error on a malformed value: the port must be
+numeric (1–65535), `FRESHCLAM_CHECKS` numeric in freshclam's valid
+range (1–50), sizes match `<digits>[K|M|G]`, bind address and mirror
+are restricted to hostname/IP/URL characters (no whitespace). Pinned by
+`tests/config-validation.sh`.
+
+### Security posture of the clamd port
+
+The clamd TCP protocol is **unauthenticated** — any peer that reaches
+the port can submit scan jobs or issue administrative commands such as
+`SHUTDOWN`. That is fine on an isolated Docker network among trusted
+peer containers (the intended deployment, and the reason
+`CLAMD_BIND=0.0.0.0` is an acceptable default), but the port must
+**never** be published beyond that. The standalone smoke-test compose
+file therefore binds it to `127.0.0.1` only.
+
+`/etc/clamav` is owned by the `clamav` runtime user because `init`
+(running as that user — the whole container is non-root) composes the
+config files at start-up. Trade-off: a compromised scanner process
+could rewrite its own config for the next start; accepted, since the
+image has no shell to leverage and the alternative (root-owned config)
+would require a root init.
+
 ### Behaviour when a mail exceeds these limits (fail-open)
 
 Scanning is **fail-open by design** — the industry-standard choice for
@@ -55,7 +84,9 @@ On a fresh install (empty `/var/lib/clamav` volume) `init` runs
 database. **This can take several minutes on first-ever start.**
 Subsequent restarts skip the sync — the persisted volume already
 has current signatures, and the background `freshclam --daemon`
-keeps them refreshed.
+keeps them refreshed. A downloaded update is activated immediately:
+`freshclam` notifies `clamd` to reload (`NotifyClamd`); clamd's
+hourly `SelfCheck` remains as fallback.
 
 If the internet is unreachable during first start, `freshclam`
 fails and `clamd` refuses to start (no DB to scan against). The
@@ -112,3 +143,21 @@ Debugging on this shell-free image:
 
     docker compose logs clamav                 # both clamd and freshclam log here
     docker compose exec rspamd rspamc scan     # scan a message via rspamd + clamav
+
+## Tests
+
+    $ npm test
+
+runs two suites against the locally built image:
+
+1. `tests/image-contract.sh` — the image is headless: no `sh`, no
+   `bash`, no `busybox`, no `perl` (same contract as the sibling
+   images).
+2. `tests/config-validation.sh` — malformed environment values are
+   refused with a clear error instead of being rendered into the
+   generated configs (config-injection guard); well-formed values
+   pass.
+
+The full mail flow including EICAR virus rejection through
+postfix → rspamd → clamav is covered by the mailservice e2e suite
+(`tests/e2e/test_virus_reject.py` in the parent repository).

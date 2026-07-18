@@ -7,6 +7,10 @@ sibling mwaeckerlin/rspamd and mwaeckerlin/redis containers.
 
 Behaviour:
 
+  0. Validate every configuration env value (whitelist per value class)
+     before rendering it into clamd.conf/freshclam.conf — a malformed
+     value aborts the start with a clear `invalid <VAR>` error instead
+     of injecting directives into the generated config files.
   1. Ensure /var/lib/clamav is writable and contains a virus database.
      - If it is empty (fresh install), run `freshclam` synchronously
        once to bootstrap the DB. This can take a few minutes on first
@@ -30,6 +34,7 @@ Supports --healthcheck: TCP-probes port 3310 (clamd's default) on
 */
 
 #include <arpa/inet.h>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -68,6 +73,48 @@ write_file(const fs::path &p, const std::string &content) {
   std::ofstream out(p, std::ios::binary | std::ios::trunc);
   if (!out) throw std::runtime_error("cannot write " + p.string());
   out << content;
+}
+
+// Every env value is rendered verbatim into a key-space-value config
+// file, so an unvalidated value — a newline above all — would inject
+// arbitrary extra directives into clamd.conf/freshclam.conf. Operator
+// input is input: whitelist-validate each value class and refuse to
+// start on anything malformed (pinned by tests/config-validation.sh).
+[[noreturn]] void
+die_invalid(const char *var, const std::string &value) {
+  std::cerr << "**** ERROR: invalid " << var << " \"" << value
+            << "\" — refusing to start" << std::endl;
+  std::exit(1);
+}
+
+void
+check_chars(const char *var, const std::string &v, const std::string &extra) {
+  if (v.empty()) die_invalid(var, v);
+  for (char c : v)
+    if (!std::isalnum(static_cast<unsigned char>(c)) &&
+        extra.find(c) == std::string::npos)
+      die_invalid(var, v);
+}
+
+long
+check_num(const char *var, const std::string &v, long min, long max) {
+  if (v.empty() || v.size() > 9 ||
+      v.find_first_not_of("0123456789") != std::string::npos)
+    die_invalid(var, v);
+  long n = std::atol(v.c_str());
+  if (n < min || n > max) die_invalid(var, v);
+  return n;
+}
+
+// clamd size values: plain bytes or a single K/M/G suffix.
+void
+check_size(const char *var, const std::string &v) {
+  auto suffix = v.find_first_not_of("0123456789");
+  if (v.empty() || suffix == 0) die_invalid(var, v);
+  if (suffix == std::string::npos) return;
+  if (suffix != v.size() - 1 ||
+      std::string("KkMmGg").find(v[suffix]) == std::string::npos)
+    die_invalid(var, v);
 }
 
 bool
@@ -130,11 +177,6 @@ tcp_probe(int port) {
 } // namespace
 
 int main(int argc, char *argv[]) try {
-  const int tcp_port = std::atoi(env_or("CLAMD_PORT", "3310").c_str());
-
-  if (argc > 1 && std::string(argv[1]) == "--healthcheck")
-    return tcp_probe(tcp_port);
-
   const std::string checks_per_day = env_or("FRESHCLAM_CHECKS", "24");
   const std::string mirror         = env_or("FRESHCLAM_MIRROR", "database.clamav.net");
   // Scan-size limits, set to clamav's architectural maxima so as much
@@ -158,6 +200,21 @@ int main(int argc, char *argv[]) try {
   const std::string stream_max     = env_or("CLAMD_STREAM_MAXLENGTH", "4G");
   const std::string bind           = env_or("CLAMD_BIND",            "0.0.0.0");
 
+  // Validate every env value before it is rendered anywhere — also on
+  // the --healthcheck path, so a misconfigured container reports
+  // unhealthy instead of probing a port that clamd never bound.
+  const int tcp_port =
+      static_cast<int>(check_num("CLAMD_PORT", env_or("CLAMD_PORT", "3310"), 1, 65535));
+  check_num("FRESHCLAM_CHECKS", checks_per_day, 1, 50);  // freshclam's valid range
+  check_chars("FRESHCLAM_MIRROR", mirror, ".-:/_");      // hostname or URL
+  check_chars("CLAMD_BIND", bind, ".:-");                // IPv4/IPv6/hostname
+  check_size("CLAMD_MAX_FILESIZE", max_size);
+  check_size("CLAMD_MAX_SCANSIZE", max_scan);
+  check_size("CLAMD_STREAM_MAXLENGTH", stream_max);
+
+  if (argc > 1 && std::string(argv[1]) == "--healthcheck")
+    return tcp_probe(tcp_port);
+
   // 1. Compose freshclam.conf and clamd.conf. They are simple
   //    key-space-value files, no templating needed.
   fs::create_directories("/etc/clamav");
@@ -165,6 +222,7 @@ int main(int argc, char *argv[]) try {
       "DatabaseDirectory " + std::string(DB_DIR) + "\n"
       "DatabaseMirror " + mirror + "\n"
       "Checks " + checks_per_day + "\n"
+      "NotifyClamd " + std::string(CLAMD_CONF) + "\n"  // reload clamd right after an update
       "LogVerbose no\n"
       "LogTime yes\n"
       "Foreground yes\n"       // for --daemon --foreground mode below
@@ -200,8 +258,8 @@ int main(int argc, char *argv[]) try {
 
   // 3. Start freshclam in --daemon --foreground so it stays a child
   //    of our init, polls the mirror on the configured interval and
-  //    notifies clamd (via SIGHUP or via clamd's own SelfCheck loop)
-  //    when new signatures land.
+  //    notifies clamd (RELOAD via NotifyClamd; clamd's own SelfCheck
+  //    loop is the fallback) when new signatures land.
   spawn_detached({FRESHCLAM, "--daemon", "--config-file=/etc/clamav/freshclam.conf", "--stdout"});
   std::this_thread::sleep_for(std::chrono::milliseconds(200));  // let freshclam log its greeting first
 
