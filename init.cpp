@@ -137,9 +137,22 @@ int main(int argc, char *argv[]) try {
 
   const std::string checks_per_day = env_or("FRESHCLAM_CHECKS", "24");
   const std::string mirror         = env_or("FRESHCLAM_MIRROR", "database.clamav.net");
-  const std::string max_size       = env_or("CLAMD_MAX_FILESIZE", "25M");
-  const std::string max_scan       = env_or("CLAMD_MAX_SCANSIZE", "100M");
-  const std::string bind           = env_or("CLAMD_BIND",         "0.0.0.0");
+  // Scan-size limits. Kept very high on purpose: a message larger than
+  // these is not fully scanned (see below), so a low limit would silently
+  // leave normal large attachments unscanned. Defaults are 1 GiB — high
+  // enough to cover any realistic mail while still bounding a
+  // resource-exhaustion attack. All configurable via env.
+  const std::string max_size       = env_or("CLAMD_MAX_FILESIZE",    "1G");
+  const std::string max_scan       = env_or("CLAMD_MAX_SCANSIZE",    "1G");
+  // StreamMaxLength bounds the INSTREAM path that rspamd uses. clamd's
+  // own default (25 MB) would abort the stream for any larger mail, so
+  // it MUST be raised to match/exceed the scan sizes — otherwise big
+  // mails arrive at clamd only to be refused mid-stream. Fail behaviour
+  // stays fail-open: a mail exceeding even this is delivered unscanned
+  // (rspamd's antivirus module only reports CLAM_VIRUS_FAIL, weight 0,
+  // no reject), never bounced.
+  const std::string stream_max     = env_or("CLAMD_STREAM_MAXLENGTH", "1G");
+  const std::string bind           = env_or("CLAMD_BIND",            "0.0.0.0");
 
   // 1. Compose freshclam.conf and clamd.conf. They are simple
   //    key-space-value files, no templating needed.
@@ -158,6 +171,7 @@ int main(int argc, char *argv[]) try {
       "TCPAddr " + bind + "\n"
       "MaxFileSize " + max_size + "\n"
       "MaxScanSize " + max_scan + "\n"
+      "StreamMaxLength " + stream_max + "\n"
       "LogTime yes\n"
       "LogSyslog no\n"
       "Foreground yes\n"       // required for --foreground below
