@@ -17,23 +17,36 @@ any consumer that speaks the clamd protocol on port 3310.
 |-----------------------|----------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `CLAMD_BIND`          | `0.0.0.0`                  | Interface(s) `clamd` binds to. Default is «all» because the container is meant to be reached from peer containers on the same Docker network.                                                          |
 | `CLAMD_PORT`          | `3310`                     | clamd's TCP port (Rspamd's default).                                                                                                                                                                    |
-| `CLAMD_MAX_FILESIZE`  | `1G`                       | clamd stops scanning an individual file larger than this. Kept very high (1 GiB) so normal large attachments are actually scanned; a low value would silently leave them unscanned. Configurable.       |
-| `CLAMD_MAX_SCANSIZE`  | `1G`                       | Total per-message scan budget. Same rationale — very high default, configurable.                                                                                                                        |
-| `CLAMD_STREAM_MAXLENGTH` | `1G`                    | Max size of an `INSTREAM` scan (the path Rspamd uses). clamd's own default is only 25 MB — it MUST be raised to match the sizes above, otherwise clamd aborts the stream for larger mails.               |
+| `CLAMD_MAX_FILESIZE`  | `2G`                       | clamd skips an individual file larger than this. Set to clamav's internal hard cap (2 GiB) — a single file above 2 GiB **cannot** be scanned by clamav and is skipped regardless of this value.          |
+| `CLAMD_MAX_SCANSIZE`  | `4G`                       | Total per-message scan budget (across archive members). clamav's ceiling is ~4 GiB.                                                                                                                     |
+| `CLAMD_STREAM_MAXLENGTH` | `4G`                    | Max size of an `INSTREAM` scan (the path Rspamd uses); clamav's ~4 GiB ceiling. clamd's own default is only 25 MB — it MUST be raised, otherwise clamd aborts the stream for larger mails.               |
 | `FRESHCLAM_CHECKS`    | `24`                       | How many times per day `freshclam --daemon` checks for signature updates. `24` = hourly.                                                                                                                |
 | `FRESHCLAM_MIRROR`    | `database.clamav.net`      | Upstream mirror for signature downloads. Override if you run a local mirror.                                                                                                                            |
 
-### Behaviour when a mail exceeds these limits
+### Behaviour when a mail exceeds these limits (fail-open)
 
-Scanning is **fail-open by design**: a message larger than the limits
-above is scanned only up to the limit (or not at all) and then
-**delivered**, never bounced. Rspamd's antivirus module reports a
-`CLAM_VIRUS_FAIL` symbol (weight 0, no action) on a scan error, so an
-oversized or unscannable mail is delivered rather than rejected —
-consistent with the mailservice rule «never reject a legitimate mail
-because of a limit». Raise the limits (they default to 1 GiB) if
-you want even larger mails fully scanned; a virus that fits inside the
-scan budget is still rejected as normal.
+Scanning is **fail-open by design** — the industry-standard choice for
+a mail gateway: a scanner limit or outage must never bounce mail. A
+message larger than clamav can scan is scanned up to the limit (or not
+at all) and then **delivered**, never rejected.
+
+The signalling is Rspamd's `CLAM_VIRUS_FAIL` symbol, which the antivirus
+module raises on any scan error (size ceiling hit, clamd unreachable,
+timeout). Its default weight is **0** (no score, no action) — this is
+Rspamd's own convention and the recommended production setting: a virus
+that clamav *can* scan is still rejected via `CLAM_VIRUS`, but an
+un-scannable or oversized mail is delivered rather than lost. Consistent
+with the mailservice rule «never reject a legitimate mail because of a
+limit».
+
+**Important:** clamav's scan sizes are hard architectural limits, not
+freely raisable — a single file above 2 GiB and a message above ~4 GiB
+simply cannot be scanned by clamav. `MESSAGE_SIZE_LIMIT` on `postfix`
+(default 100 GiB) is deliberately far higher, so very large mails are
+**accepted and delivered but not virus-scanned**. If that gap matters
+for your deployment, cap `MESSAGE_SIZE_LIMIT` at what clamav can scan,
+or add an out-of-band scanner for large files. There is no clamav
+setting that scans a 100 GiB mail.
 
 ## First start: initial signature download
 

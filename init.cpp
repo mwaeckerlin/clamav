@@ -137,21 +137,25 @@ int main(int argc, char *argv[]) try {
 
   const std::string checks_per_day = env_or("FRESHCLAM_CHECKS", "24");
   const std::string mirror         = env_or("FRESHCLAM_MIRROR", "database.clamav.net");
-  // Scan-size limits. Kept very high on purpose: a message larger than
-  // these is not fully scanned (see below), so a low limit would silently
-  // leave normal large attachments unscanned. Defaults are 1 GiB — high
-  // enough to cover any realistic mail while still bounding a
-  // resource-exhaustion attack. All configurable via env.
-  const std::string max_size       = env_or("CLAMD_MAX_FILESIZE",    "1G");
-  const std::string max_scan       = env_or("CLAMD_MAX_SCANSIZE",    "1G");
-  // StreamMaxLength bounds the INSTREAM path that rspamd uses. clamd's
-  // own default (25 MB) would abort the stream for any larger mail, so
-  // it MUST be raised to match/exceed the scan sizes — otherwise big
-  // mails arrive at clamd only to be refused mid-stream. Fail behaviour
-  // stays fail-open: a mail exceeding even this is delivered unscanned
-  // (rspamd's antivirus module only reports CLAM_VIRUS_FAIL, weight 0,
-  // no reject), never bounced.
-  const std::string stream_max     = env_or("CLAMD_STREAM_MAXLENGTH", "1G");
+  // Scan-size limits, set to clamav's architectural maxima so as much
+  // of a mail as clamav CAN scan is scanned. These are hard, RAM/design
+  // bounds inside clamav — they cannot be raised to arbitrary values:
+  //   MaxFileSize     — internally capped at 2 GiB; a single file/embedded
+  //                     file larger than that is skipped (not scannable).
+  //   MaxScanSize     — total scan budget across a message/archive.
+  //   StreamMaxLength — the INSTREAM path rspamd uses; ~4 GiB ceiling.
+  //                     clamd's own default is only 25 MB, which would
+  //                     abort the stream for any larger mail — so it MUST
+  //                     be raised.
+  // A mail larger than what clamav can scan (roughly >2 GiB per file /
+  // >4 GiB per message) is delivered UNSCANNED, never bounced — Rspamd's
+  // antivirus module reports CLAM_VIRUS_FAIL (weight 0, no action). This
+  // gap is a clamav limitation, not a configurable-away one: MESSAGE_SIZE_LIMIT
+  // (postfix, 100 GiB) is intentionally far higher than anything clamav
+  // can scan. Fail-open keeps large legitimate mail flowing.
+  const std::string max_size       = env_or("CLAMD_MAX_FILESIZE",    "2G");
+  const std::string max_scan       = env_or("CLAMD_MAX_SCANSIZE",    "4G");
+  const std::string stream_max     = env_or("CLAMD_STREAM_MAXLENGTH", "4G");
   const std::string bind           = env_or("CLAMD_BIND",            "0.0.0.0");
 
   // 1. Compose freshclam.conf and clamd.conf. They are simple
