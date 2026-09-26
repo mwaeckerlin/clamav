@@ -1,6 +1,6 @@
 {
   "name": "@mwaeckerlin/clamav",
-  "version": "1.0.2",
+  "version": "3.5.1",
   "scripts": {
     "build": "docker compose build",
     "start": "docker compose up --build --force-recreate --remove-orphans",
