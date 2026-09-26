@@ -21,7 +21,7 @@ COPY --from=init init /usr/bin/init
 # per-file loop — a multi-file `ldd a b` silently lists only `a`.
 # The loop also covers libclamav/libfreshclam/libclamunrar, whose
 # own deps (libcurl, libssl, libstdc++, …) do not appear in the
-# binaries' ldd output. `/lib/ld-musl-x86_64.so.1` is listed
+# binaries' ldd output. `/lib/ld-musl-<arch>.so.1` is listed
 # explicitly: it is the ELF interpreter — without it every dynamic
 # binary fails with a bare `No such file or directory`.
 RUN tar cph \
@@ -29,7 +29,7 @@ RUN tar cph \
         /etc/passwd /etc/group /etc/nsswitch.conf \
         /etc/ssl/certs /etc/ssl/cert.pem /usr/share/ca-certificates \
         /usr/sbin/clamd /usr/bin/freshclam /usr/bin/init \
-        /lib/ld-musl-x86_64.so.1 \
+        /lib/ld-musl-*.so.1 \
         /usr/lib/libclamav.so* /usr/lib/libfreshclam.so* \
         /usr/lib/libclamunrar*.so* \
         $(for f in /usr/sbin/clamd /usr/bin/freshclam \
