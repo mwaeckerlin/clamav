@@ -1,5 +1,8 @@
 # Changelog
 
+- 2026-10-23 **3.5.2**
+    - The version line 3 is published as `mwaeckerlin/clamav:3` from the branch `3`, on every push to it and every week from the run on master, so it gets the security fixes of its base image; its test checks the image
+
 - 2026-09-26 **3.5.1**
     - The image builds on arm64 as well as on amd64 and is published for both under one tag, built and published automatically on every change and every week
 
